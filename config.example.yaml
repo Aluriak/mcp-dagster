@@ -1,0 +1,23 @@
+# mcp-dagster — configuration d'exemple.
+# Chaque champ est surchargeable par variable d'env DAGSTER_MCP_<CHAMP_EN_MAJS>.
+
+# URL de l'instance Dagster (API GraphQL).
+# L'API se trouve sous /api (Dagster UI : /, API : /api).
+base_url: "https://dagster.example.org"
+
+# Jeton envoyé dans l'en-tête Authorization: Bearer <api_token>.
+# Sur une instance derrière oauth2-proxy + Keycloak, c'est le token OIDC
+# (access_token du client attendus par le proxy) ou le jeton API si l'instance
+# n'est pas derrière un proxy. Ne JAMAIS mettre le token en clair ici :
+api_token: ""            # ou env DAGSTER_MCP_API_TOKEN
+
+# En-têtes supplémentaires envoyés sur chaque requête.
+extra_headers: {}
+
+# Timeout HTTP en secondes.
+timeout: 30
+
+# Mode lecture seule : refuse TOUTE opération GraphQL de modification
+# (startRun, deleteRuns, applyWorkspaceChange, ...). Valeur par défaut : true.
+# L'env DAGSTER_MCP_READ_ONLY=0/1/true/false force la valeur quel que soit le yaml.
+read_only: true

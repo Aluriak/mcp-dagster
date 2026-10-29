@@ -35,6 +35,21 @@ entrante dans un contextvar (``request_ctx``), que le client Dagster lit au
 moment de l'appel GraphQL sortant pour poser la valeur du header comme
 ``Authorization`` (relay tel quel). Si le header est absent, l'appel échoue
 explicitement — jamais de repli sur un token statique.
+
+DNS rebinding / contrôle du header Host
+---------------------------------------
+Le SDK MCP (FastMCP) active automatiquement la protection anti-DNS-rebinding
+quand le serveur est construit avec ``host=127.0.0.1`` (sa valeur par
+défaut) : ``allowed_hosts`` se fige sur les loopbacks ET n'est plus
+recalculée quand ``main()`` passe ``host=0.0.0.0``. Derrière un réseau de
+conteneurs, le client (LibreChat) envoie ``Host: <conteneur>:8000`` → le
+SDK répond **421 Misdirected Request** avant même l'``initialize``.
+
+Cette protection vise un serveur MCP exposé directement sur le web derrière
+un domaine DNS ; ici le service est sur un réseau compose interne et l'auth
+réelle est le relay du jeton utilisateur. ``main()`` désactive donc
+explicitement le contrôle Host/Origin (``transport_security``) — c'est une
+décision de posture, pas un oubli.
 """
 
 from __future__ import annotations
@@ -43,6 +58,7 @@ import os
 
 from starlette.applications import Starlette
 from starlette.requests import Request
+from starlette.types import ASGIApp
 
 from .request_ctx import set_request_headers
 from .server import mcp
@@ -83,23 +99,42 @@ class HeaderCaptureMiddleware:
         await self.app(scope, receive, send)
 
 
-def main() -> None:
-    # host/port vivent dans les Settings de FastMCP ; on les fixe ici
-    # explicitement plutôt que de compter sur les variables FASTMCP_*.
-    # host=0.0.0.0 : en conteneur il faut écouter toutes les interfaces,
-    # pas 127.0.0.1 (défaut FastMCP). stateless : voir docstring.
+def _configure_http(mcp) -> None:
+    """Réglages FastMCP du mode conteneur, avant la création de l'app ASGI.
+
+    ``transport_security = None`` est le cœur du correctif du 421 : FastMCP
+    auto-active la protection anti-DNS-rebinding parce qu'il est construit
+    avec ``host=127.0.0.1`` (défaut), et ``allowed_hosts`` reste figé sur les
+    loopbacks quand on passe à ``0.0.0.0``. Derrière un réseau compose, le
+    client (LibreChat) envoie ``Host: <conteneur>:8000`` → le SDK répond
+    421 « Invalid Host header » avant même l'``initialize``. Service interne
+    (non exposé publiquement), authentifié par relay du jeton utilisateur :
+    contrôle Host/Origin désactivé explicitement (``None`` = la posture par
+    défaut du SDK, protection éteinte).
+    """
     mcp.settings.host = "0.0.0.0"
     mcp.settings.port = _port()
     mcp.settings.stateless_http = True
+    mcp.settings.transport_security = None
 
+
+def build_app() -> ASGIApp:
+    """App ASGI du transport HTTP : middleware de capture des headers posé
+    sur l'app streamable-http de FastMCP. Séparé de ``main()`` pour être
+    testable sans lancer uvicorn."""
+    _configure_http(mcp)
+    inner: Starlette = mcp.streamable_http_app()
+    return HeaderCaptureMiddleware(inner)
+
+
+def main() -> None:
     # On wrap l'app ASGI du transport pour y greffer la capture des headers.
     # ``streamable_http_app()`` renvoie l'ASGI app interne ; on l'installe
     # derrière notre middleware, puis on sert avec uvicorn (mêmes paramètres
     # que ``FastMCP.run(transport="streamable-http")``).
     import uvicorn
 
-    inner: Starlette = mcp.streamable_http_app()
-    app = HeaderCaptureMiddleware(inner)
+    app = build_app()
 
     config = uvicorn.Config(
         app,

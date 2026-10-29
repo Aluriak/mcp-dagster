@@ -136,6 +136,21 @@ mcpServers:
 
 ## Image conteneur
 
+**Réseau / header `Host` (important en conteneur).** Le SDK MCP (FastMCP)
+active par défaut une protection anti-DNS-rebinding qui rejette les
+requêtes dont le header `Host` ne figure pas dans une liste autorisée
+(les loopbacks, quand le serveur est construit en local). Derrière un
+réseau de conteneurs, le client (ex. LibreChat) envoie
+`Host: <nom-du-conteneur>:8000` → sans correctif, **421 Misdirected
+Request** avant même l'`initialize` (symptôme côté client : « échec de
+l'initialisation du serveur mcp »).
+
+Le mode conteneur (`python -m mcp_dagster`) désactive donc explicitement
+ce contrôle : le service est interne au réseau compose et l'authentification
+réelle est le **relay du jeton utilisateur** (voir ci-dessus), pas le
+header `Host`. Ne réactivez pas cette protection sans exposer le serveur
+sur un domaine public derrière un reverse proxy qui gère l'authentification.
+
 Le conteneur expose le serveur en **streamable-HTTP stateless** sur le port
 `DAGSTER_MCP_PORT` (défaut `8000`) :
 

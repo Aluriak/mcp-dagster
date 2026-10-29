@@ -1,12 +1,22 @@
 # mcp-dagster
 
-Un [MCP](https://modelcontextprotocol.io) pour interroger l'API GraphQL d'une
-instance [Dagster](https://dagster.io) : vue d'ensemble, assets, états de
-partitions, runs, sensors et schedules.
+Un [MCP](https://modelcontextprotocol.io) pour interroger l'API GraphQL
+1.x d'une instance [Dagster](https://dagster.io) : workspace/code
+locations, assets, états de partitions, lineage, runs, automatisations
+(schedules/sensors), backfills.
 
-Lecture d'abord : toutes les opérations d'écriture sont **refusées par défaut**
-(mode `read_only`). Le write reste possible, mais seulement en le débloquant
-explicitement — la V1 ne fournit de toute façon que des outils de lecture.
+**Design V2** : le serveur privilégie la **latitude de l'agent**. Les
+outils spécialisés couvrent les questions courantes ; `dagster_examples`
+fournit des requêtes GraphQL modèles documentées que l'agent peut
+**adapter, combiner et lancer** via `dagster_raw_query` (accès au schéma
+complet). Toutes les requêtes embarquées sont validées contre le vrai
+schéma 1.12.1 (fixture `tests/schema_1_12_1.graphql`).
+
+Lecture d'abord : en mode `read_only` (défaut), **aucune** opération
+d'écriture n'est autorisée — y compris une mutation transmise via
+`dagster_raw_query`. La seule écriture fournie est `dagster_materialize`,
+derrière `read_only: false` ET une confirmation explicite
+(`read_only=false` au niveau du tool).
 
 ## Installation
 
@@ -112,16 +122,39 @@ mcpServers:
 > client MCP) qui injecte le jeton de l'utilisateur courant dans ce header —
 > pas le LLM. Le serveur n'y touche pas : il le relaye tel quel.
 
-## Outils (V1)
+## Outils (V2 — API Dagster 1.x)
+
+Lecture :
 
 | Outil | Description |
 |---|---|
-| `dagster_overview` | nom du dépôt, jobs, 10 derniers runs, backfills, schedules |
-| `dagster_list_assets` | assets : code version, dernière matérialisation, nb de partitions |
-| `dagster_asset_state` | état + métadonnées d'un asset par clé (`ch.dataset` ou `ch/dataset`) |
-| `dagster_list_runs` | runs, filtrables par `job_name` et/ou `status` |
-| `dagster_run_detail` | détail d'un run : statut, job, tags, métadonnées, steps |
-| `dagster_sensors_schedules` | sensors + schedules avec leur état |
+| `dagster_overview` | locations + repositories, 10 derniers runs en erreur, backfills récents — point de départ |
+| `dagster_workspace_status` | état détaillé des code locations (chargement, source de définitions, métadonnées) |
+| `dagster_list_assets` | assets du repository : clé, groupe, jobs, stockage, partitions |
+| `dagster_list_assets_paginated` | assets paginés (tous repos), filtrables par préfixe de clé |
+| `dagster_asset_status` | état complet d'un asset : partitions, fraîcheur, ressources, lineage amont/aval, dernières matérialisations |
+| `dagster_list_runs` | runs filtrables par job et/ou statut(s) |
+| `dagster_run_detail` | détail d'un run : tags, config, stats par step, 60 premiers événements (logs, échecs, métadonnées de matérialisation) |
+| `dagster_automations` | schedules + sensors : actif/désactivé, cron, prochain tick simulé, 5 derniers ticks |
+| `dagster_backfills` | backfills en cours/terminés et leur progression par partition |
+| `dagster_jobs` | jobs/pipelines du repository + partition sets |
+
+Latitude agent :
+
+| Outil | Description |
+|---|---|
+| `dagster_examples` | requêtes GraphQL modèles documentées (erreurs récentes, partitions du mois, queue, automatisations, locations, lineage, ressources↔assets, métadonnées de run) — à adapter puis lancer |
+| `dagster_raw_query` | requête GraphQL arbitraire **lecture seule** en mode `read_only` (les mutations y sont refusées) ; accès au schéma complet en read-write |
+
+Écriture (read-write uniquement) :
+
+| Outil | Description |
+|---|---|
+| `dagster_materialize` | matérialise des assets (backfill) — verrou serveur `read_only: false` + confirmation explicite `read_only=false` |
+
+Si l'instance expose plusieurs repositories, les outils qui ciblent un
+repository acceptent `location`/`repository` (les valeurs sont visibles via
+`dagster_overview`) ; sinon le premier repository accessible est utilisé.
 
 ## Exemple de déclaration (client MCP)
 
@@ -142,20 +175,14 @@ mcpServers:
 
 ## Image conteneur
 
-**Réseau / header `Host` (important en conteneur).** Le SDK MCP (FastMCP)
-active par défaut une protection anti-DNS-rebinding qui rejette les
-requêtes dont le header `Host` ne figure pas dans une liste autorisée
-(les loopbacks, quand le serveur est construit en local). Derrière un
-réseau de conteneurs, le client (ex. LibreChat) envoie
-`Host: <nom-du-conteneur>:8000` → sans correctif, **421 Misdirected
-Request** avant même l'`initialize` (symptôme côté client : « échec de
-l'initialisation du serveur mcp »).
-
-Le mode conteneur (`python -m mcp_dagster`) désactive donc explicitement
-ce contrôle : le service est interne au réseau compose et l'authentification
-réelle est le **relay du jeton utilisateur** (voir ci-dessus), pas le
-header `Host`. Ne réactivez pas cette protection sans exposer le serveur
-sur un domaine public derrière un reverse proxy qui gère l'authentification.
+**Réseau / header `Host`.** Le port du SDK `mcp` 1.x vers FastMCP 3.x a
+supprimé à la racine l'ancienne protection anti-DNS-rebinding (contrôle du
+header `Host`) qui provoquait des **421 Misdirected Request** derrière un
+réseau de conteneurs (le client envoie `Host: <conteneur>:8000`, pas un
+loopback). Le SDK 3.x n'applique aucun contrôle de `Host` par défaut — plus
+aucune configuration nécessaire ; un test de bout en bout le garantit
+(`tests/test_http_host.py`, `Host: mcp-dagster-ro:8000`). L'authentification
+réelle reste le **relay du jeton utilisateur** (voir ci-dessus).
 
 Le conteneur expose le serveur en **streamable-HTTP stateless** sur le port
 `DAGSTER_MCP_PORT` (défaut `8000`) :
@@ -199,16 +226,23 @@ branche par défaut et par tag.
 .venv/bin/python -m pytest tests/ -q
 ```
 
-Tous les tests sont hors-réseau (client httpx mocké).
+Tous les tests sont hors-réseau (client httpx mocké). Les 19 requêtes
+embarquées (outils + exemples) sont validées dans la suite contre le vrai
+schéma Dagster 1.12.1 (fixture `tests/schema_1_12_1.graphql`, généré via
+`create_schema()` de `dagster-graphql`) : tout dérive de schéma échoue les
+tests.
 
 ## Limites connues / suite
 
-- Les GraphQL sont calés sur l'API Dagster ~1.8 (à valider sur la version
-  exacte de votre instance — le schema est légèrement différent selon les
-  versions).
-- Pas encore de `dagster_asset_logs` (logs de run) ni d'outils write
-  (backfill, materialize, retry) : à ajouter une fois la lecture validée en
-  production, derrière `read_only: false`.
+- Les requêtes sont calées sur le schéma Dagster **1.12.1** ; sur des
+  versions très différentes du webserver, un champ peut avoir bougé —
+  `dagster_raw_query` (et les erreurs GraphQL remontées) restent le plan B.
+- `dagster_materialize` (backfill d'assets) est le seul outil d'écriture ;
+  les autres écritures (terminer un run, recharger un repository, …)
+  passent par `dagster_raw_query` en read-write, à l'initiative de
+  l'opérateur.
+- Pas encore de streaming des logs de run en continu (les 60 premiers
+  événements sont retournés par `dagster_run_detail`).
 
 ## Licence
 

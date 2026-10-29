@@ -220,6 +220,6 @@ def test_end_to_end_host_and_forward(monkeypatch):
         # Le relay : le jeton entrant est passé TEL QUEL au client Dagster.
         assert fake.requests, "aucune requête GraphQL émise"
         assert fake.requests[0]["headers"]["Authorization"] == "Bearer user-jeton"
-        assert "run(runId: $runId)" in fake.requests[0]["json"]["query"]
+        assert "runOrError(runId: $runId)" in fake.requests[0]["json"]["query"]
     finally:
         t.join(timeout=5)

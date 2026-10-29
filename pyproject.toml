@@ -17,7 +17,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+# graphql-core : valide les requêtes du serveur contre le vrai schéma
+# Dagster 1.x (tests/schema_1_12_1.graphql) sans dépendre de dagster-graphql
+# (paquet lourd). Le SDL est un snapshot de `create_schema()` de la 1.12.1.
+dev = ["pytest>=8", "graphql-core>=3.2"]
 
 [project.scripts]
 mcp-dagster = "mcp_dagster.server:mcp.run"

@@ -22,7 +22,12 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 
 from .config import Config
-from .dagster_client import DagsterClient, DagsterError, looks_like_write
+from .dagster_client import (
+    DagsterClient,
+    DagsterError,
+    ForwardAuthError,
+    looks_like_write,
+)
 
 mcp = FastMCP("mcp-dagster")
 
@@ -46,6 +51,8 @@ def _run_tool(fn):
             try:
                 return fn(client, *args, **kwargs)
             except PermissionError as e:
+                raise ToolError(str(e)) from e
+            except ForwardAuthError as e:
                 raise ToolError(str(e)) from e
             except DagsterError as e:
                 raise ToolError(str(e)) from e

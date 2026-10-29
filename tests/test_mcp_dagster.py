@@ -15,7 +15,13 @@ from mcp_dagster.config import Config
 from mcp_dagster.dagster_client import (
     DagsterClient,
     DagsterError,
+    ForwardAuthError,
     looks_like_write,
+)
+from mcp_dagster.request_ctx import (
+    RequestHeaders,
+    get_request_headers,
+    set_request_headers,
 )
 import mcp_dagster.server as server
 
@@ -56,6 +62,36 @@ class FakeClient:
 def make_client(**fake_kwargs) -> DagsterClient:
     cfg = Config(base_url="http://dagster.local", api_token="tok")
     return DagsterClient(cfg, client=FakeClient(**fake_kwargs))
+
+
+# Le contextvar de la requête courante est global au module ; on le remets à
+# zéro entre chaque test pour éviter les fuites (une requête teste A ne doit
+# pas polluer la requête teste B).
+@pytest.fixture(autouse=True)
+def _reset_request_ctx():
+    set_request_headers(None)
+    yield
+    set_request_headers(None)
+
+
+# ── request_ctx : vue headers insensible à la casse ─────────────────────────
+
+
+def test_request_headers_case_insensitive_and_trims():
+    rh = RequestHeaders({"Authorization": "  Bearer x  ", "X-Other": "a"})
+    assert rh.get("authorization") == "Bearer x"
+    assert rh.get("AUTHORIZATION") == "Bearer x"
+    assert rh.get("x-other") == "a"
+    assert rh.get("absent") is None
+    assert bool(rh) is True
+    assert RequestHeaders(None).get("x") is None
+    assert bool(RequestHeaders({})) is False
+
+
+def test_request_headers_contextvar_roundtrip():
+    assert get_request_headers().get("Authorization") is None  # stdio par défaut
+    set_request_headers({"Authorization": "Bearer u1"})
+    assert get_request_headers().get("Authorization") == "Bearer u1"
 
 
 # ── looks_like_write ─────────────────────────────────────────────────────────
@@ -105,6 +141,97 @@ def test_http_error_raises():
     c = make_client(status_code=404, text="<html>pas ça</html>")
     with pytest.raises(DagsterError, match="HTTP 404"):
         c.query("query { x }")
+
+
+# ── forward_header : relay du jeton utilisateur (mode HTTP partagé) ──────────
+
+
+def _forward_client(**fake_kwargs) -> DagsterClient:
+    """Client en mode forward_header (sans api_token)."""
+    cfg = Config(
+        base_url="http://dagster.local",
+        forward_header="Authorization",
+    )
+    return DagsterClient(cfg, client=FakeClient(**fake_kwargs))
+
+
+def test_forward_header_relays_incoming_token_verbatim():
+    """(spec 1) header présent → transmis TEL QUEL comme Authorization sortant."""
+    c = _forward_client(data={"repository": {"name": "r"}})
+    set_request_headers({"Authorization": "Bearer user-jeton"})
+    out = c.query("query { repository { name } }")
+    assert out["repository"]["name"] == "r"
+    sent = c._client.requests[0]
+    # « tel quel » : pas de préfixe Bearer ajouté par le serveur.
+    assert sent["headers"]["Authorization"] == "Bearer user-jeton"
+
+
+def test_forward_header_case_insensitive_lookup():
+    """Le nom de header configuré est cherché insensible à la casse."""
+    c = _forward_client(data={})
+    set_request_headers({"authorization": "eyJraw.token"})
+    c.query("query { repository { name } }")
+    assert c._client.requests[0]["headers"]["Authorization"] == "eyJraw.token"
+
+
+def test_forward_header_missing_fails_explicitly_no_fallback():
+    """(spec 2) forward_header actif mais header absent → échec explicite,
+    AUCUN réseau, aucun repli sur api_token."""
+    c = _forward_client(data={})  # pas de set_request_headers → contexte vide
+    with pytest.raises(ForwardAuthError, match="forward_header"):
+        c.query("query { repository { name } }")
+    assert not c._client.requests  # rien n'est envoyé sur le réseau
+
+
+def test_forward_header_empty_value_fails_too():
+    """Valeur du header présente mais vide → idem, échec (pas de jeton utile)."""
+    c = _forward_client(data={})
+    set_request_headers({"Authorization": "   "})
+    with pytest.raises(ForwardAuthError):
+        c.query("query { x }")
+    assert not c._client.requests
+
+
+def test_api_token_and_forward_header_mutually_exclusive():
+    """(spec 3) les deux renseignés → erreur de configuration au démarrage."""
+    cfg = Config(
+        base_url="http://dagster.local",
+        api_token="tok",
+        forward_header="Authorization",
+    )
+    with pytest.raises(ValueError, match="mutuellement exclusifs"):
+        cfg.validate()
+    # La construction du client appelle validate() → même échec.
+    with pytest.raises(ValueError, match="mutuellement exclusifs"):
+        DagsterClient(cfg, client=FakeClient(data={}))
+
+
+def test_forward_header_via_env_and_yaml(tmp_path, monkeypatch):
+    """(spec 3) chargement du champ depuis YAML + env DAGSTER_MCP_FORWARD_HEADER."""
+    y = tmp_path / "cfg.yaml"
+    y.write_text("base_url: https://a\nforward_header: X-User-Token\n")
+    monkeypatch.setenv("DAGSTER_MCP_CONFIG", str(y))
+    cfg = Config.load()
+    assert cfg.forward_header == "X-User-Token"
+    assert cfg.uses_forward_header is True
+
+    # L'env force la valeur du yaml.
+    monkeypatch.setenv("DAGSTER_MCP_FORWARD_HEADER", "Authorization")
+    assert Config.load().forward_header == "Authorization"
+
+    # Par défaut (aucun yaml, aucun env), le mode statique reste le comportement.
+    monkeypatch.delenv("DAGSTER_MCP_CONFIG")
+    monkeypatch.delenv("DAGSTER_MCP_FORWARD_HEADER")
+    assert Config(base_url="http://x").uses_forward_header is False
+
+
+def test_forward_header_does_not_send_api_token_when_forwarding():
+    """En mode forward, le Authorization sortant NE vient JAMAIS d'un token
+    statique, même si extra_headers est vide : c'est le relay qui décide."""
+    c = _forward_client(data={})
+    set_request_headers({"Authorization": "Bearer only-this"})
+    c.query("query { x }")
+    assert c._client.requests[0]["headers"]["Authorization"] == "Bearer only-this"
 
 
 # ── read_only : refus des écritures ──────────────────────────────────────────

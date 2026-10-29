@@ -32,6 +32,12 @@ class DagsterError(RuntimeError):
         super().__init__(f"Erreur GraphQL Dagster : {detail}")
 
 
+class ForwardAuthError(RuntimeError):
+    """Le mode ``forward_header`` est actif mais la requête MCP entrante ne
+    porte pas le header attendu. Échec explicite — jamais de repli sur un
+    token statique (qui élargirait les droits de l'utilisateur)."""
+
+
 def looks_like_write(query: str) -> bool:
     """Vrai si la requête GraphQL contient un opérateur d'écriture connu."""
     return any(p.search(query) for p in _WRITE_PATTERNS)
@@ -44,6 +50,29 @@ class DagsterClient:
         self._client = client or httpx.Client(
             base_url=cfg.base_url, timeout=cfg.timeout
         )
+
+    def _request_headers(self) -> dict[str, str]:
+        """Headers de l'appel sortant vers Dagster.
+
+        En mode ``forward_header``, échoue explicitement (``ForwardAuthError``)
+        si la requête MCP entrante ne porte pas le header attendu : aucun repli
+        silencieux sur ``api_token`` (exclu de toute façon par ``validate``).
+        """
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        auth = self._cfg.outbound_auth_header()
+        if self._cfg.uses_forward_header and not auth:
+            raise ForwardAuthError(
+                f"Requête MCP entrante sans le header {self._cfg.forward_header!r} "
+                "en mode forward_header : impossible de relayer le jeton de "
+                "l'utilisateur vers Dagster. Aucun repli sur un token statique "
+                "n'est effectué (sécurité : le serveur ne doit jamais élargir "
+                "les droits d'un utilisateur au-delà de ce que l'infrastructure "
+                "lui accorde déjà)."
+            )
+        if auth:
+            headers["Authorization"] = auth
+        headers.update(self._cfg.extra_headers)
+        return headers
 
     def close(self) -> None:
         self._client.close()
@@ -80,7 +109,7 @@ class DagsterClient:
         resp = self._client.post(
             "/api",
             json={"query": query, "variables": variables},
-            headers=self._cfg.auth_headers(),
+            headers=self._request_headers(),
         )
         if resp.status_code != 200:
             raise DagsterError(

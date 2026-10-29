@@ -5,7 +5,13 @@ Ordre de priorité (le dernier gagne) :
   2. fichier YAML (chemin : env DAGSTER_MCP_CONFIG, sinon ./config.yaml,
      sinon ~/.config/mcp-dagster/config.yaml)
   3. variables d'env ciblées (DAGSTER_MCP_BASE_URL, DAGSTER_MCP_API_TOKEN,
-     DAGSTER_MCP_TIMEOUT, DAGSTER_MCP_READ_ONLY)
+     DAGSTER_MCP_TIMEOUT, DAGSTER_MCP_READ_ONLY, DAGSTER_MCP_FORWARD_HEADER)
+
+``forward_header`` (mode HTTP partagé) : quand il est défini, le serveur ne
+doit **pas** utiliser ``api_token`` ; il relaie, tel quel vers Dagster, le
+header de la requête MCP entrante de ce nom (le credential de l'utilisateur
+courant). ``forward_header`` et ``api_token`` sont mutuellement exclusifs :
+les deux renseignés = erreur de configuration au démarrage.
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ def _default_config_paths() -> list[Path]:
 class Config:
     base_url: str = ""
     api_token: str = ""
+    forward_header: str = ""
     extra_headers: dict[str, str] = field(default_factory=dict)
     timeout: float = 30.0
     read_only: bool = True
@@ -51,6 +58,7 @@ class Config:
         cfg = cls(
             base_url=str(data.get("base_url", "")),
             api_token=str(data.get("api_token", "")),
+            forward_header=str(data.get("forward_header", "") or ""),
             extra_headers=dict(data.get("extra_headers") or {}),
             timeout=float(data.get("timeout", 30.0)),
             read_only=bool(data.get("read_only", True)),
@@ -59,11 +67,19 @@ class Config:
         # Surcharges ciblées par env.
         cfg.base_url = os.environ.get(ENV_PREFIX + "BASE_URL", cfg.base_url)
         cfg.api_token = os.environ.get(ENV_PREFIX + "API_TOKEN", cfg.api_token)
+        cfg.forward_header = (
+            os.environ.get(ENV_PREFIX + "FORWARD_HEADER") or cfg.forward_header
+        ).strip()
         if v := os.environ.get(ENV_PREFIX + "TIMEOUT"):
             cfg.timeout = float(v)
         if v := os.environ.get(ENV_PREFIX + "READ_ONLY"):
             cfg.read_only = v.strip().lower() not in {"0", "false", "no", "off"}
         return cfg
+
+    @property
+    def uses_forward_header(self) -> bool:
+        """Vrai si le mode relay du jeton utilisateur est actif."""
+        return bool(self.forward_header)
 
     def validate(self) -> None:
         if not self.base_url:
@@ -71,14 +87,36 @@ class Config:
                 "base_url manquant : définissez-le dans la config "
                 f"(fichier YAML) ou via {ENV_PREFIX}BASE_URL."
             )
+        if self.api_token and self.forward_header:
+            raise ValueError(
+                "api_token et forward_header sont mutuellement exclusifs : "
+                "ne définissez qu'un seul des deux (mode token statique "
+                f"vs mode relay du jeton utilisateur). api_token={bool(self.api_token)}, "
+                f"forward_header={self.forward_header!r}."
+            )
 
     @property
     def graphql_url(self) -> str:
         return self.base_url.rstrip("/") + "/api"
 
-    def auth_headers(self) -> dict[str, str]:
-        headers: dict[str, str] = {"Content-Type": "application/json"}
+    def outbound_auth_header(self) -> str | None:
+        """Valeur du header ``Authorization`` à poser sur l'appel sortant vers
+        Dagster, pour la requête courante.
+
+        - Mode ``forward_header`` (HTTP partagé) : relaie tel quel la valeur du
+          header de la requête MCP entrante de ce nom (le jeton de l'utilisateur
+          courant). Retourne ``None`` s'il est absent/vide — c'est le client qui
+          devra alors **échouer explicitement**, jamais replier sur ``api_token``.
+        - Mode ``api_token`` (statique, stdio) : ``Bearer <token>``.
+        - Aucun des deux : ``None`` (appel non authentifié, comportement V1).
+
+        Note : ``forward_header`` et ``api_token`` étant exclusifs (``validate``),
+        ce sont les deux branches d'un switch mutuellement exclusif.
+        """
+        if self.forward_header:
+            from .request_ctx import get_request_headers
+
+            return get_request_headers().get(self.forward_header)
         if self.api_token:
-            headers["Authorization"] = f"Bearer {self.api_token}"
-        headers.update(self.extra_headers)
-        return headers
+            return f"Bearer {self.api_token}"
+        return None

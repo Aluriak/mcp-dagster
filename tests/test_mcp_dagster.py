@@ -323,7 +323,7 @@ def test_tool_overview_end_to_end(monkeypatch):
         )
     )
     result = asyncio.run(server.mcp.call_tool("dagster_overview", {}))
-    content = result[0]
+    content = result.content
     text = content[0].text
     data = json.loads(text)
     assert data["repository"]["name"] == "cdc_eds"
@@ -337,7 +337,7 @@ def test_tool_asset_state_not_found(monkeypatch):
     result = asyncio.run(
         server.mcp.call_tool("dagster_asset_state", {"key": "ch.dataset"})
     )
-    content = result[0]
+    content = result.content
     assert "introuvable" in content[0].text
 
 

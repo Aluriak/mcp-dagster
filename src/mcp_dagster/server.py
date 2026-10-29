@@ -18,8 +18,8 @@ import functools
 import inspect
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.exceptions import ToolError
+from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from .config import Config
 from .dagster_client import (

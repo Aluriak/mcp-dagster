@@ -1,9 +1,9 @@
 """Point d'entrée conteneur : transport HTTP (stateless).
 
 En local / stdio on passe par le script `mcp-dagster`
-(``mcp_dagster.server:mcp.run`` en stdio). En conteneur, LibreChat (ou tout
-autre client MCP HTTP) consomme le serveur sur son port, donc on force le
-transport HTTP stateless :
+(``mcp_dagster.server:mcp.run`` en stdio, transport par défaut de FastMCP).
+En conteneur, LibreChat (ou tout autre client MCP HTTP) consomme le serveur
+sur son port, donc on force le transport HTTP stateless :
 
     python -m mcp_dagster
 
@@ -36,27 +36,30 @@ moment de l'appel GraphQL sortant pour poser la valeur du header comme
 ``Authorization`` (relay tel quel). Si le header est absent, l'appel échoue
 explicitement — jamais de repli sur un token statique.
 
-DNS rebinding / contrôle du header Host
----------------------------------------
-Le SDK MCP (FastMCP) active automatiquement la protection anti-DNS-rebinding
-quand le serveur est construit avec ``host=127.0.0.1`` (sa valeur par
-défaut) : ``allowed_hosts`` se fige sur les loopbacks ET n'est plus
-recalculée quand ``main()`` passe ``host=0.0.0.0``. Derrière un réseau de
-conteneurs, le client (LibreChat) envoie ``Host: <conteneur>:8000`` → le
-SDK répond **421 Misdirected Request** avant même l'``initialize``.
+Le middleware est greffé via l'API native de FastMCP
+(``http_app(middleware=[Middleware(...)])`` / ``run(..., middleware=...)``) :
+il s'exécute dans le contexte asyncio de la requête, donc le contextvar posé
+dans ``HeaderCaptureMiddleware`` est visible par toute la chaîne de tool calls
+servie par cette requête. (Validé de bout en bout, y compris le passage par
+le lifespan et le session manager — voir tests/test_http_host.py.)
 
-Cette protection vise un serveur MCP exposé directement sur le web derrière
-un domaine DNS ; ici le service est sur un réseau compose interne et l'auth
-réelle est le relay du jeton utilisateur. ``main()`` désactive donc
-explicitement le contrôle Host/Origin (``transport_security``) — c'est une
-décision de posture, pas un oubli.
+Header Host / réseau conteneur
+------------------------------
+Ce service tourne sur un réseau compose interne et n'est pas exposé
+publiquement ; l'authentification réelle est le relay du jeton utilisateur.
+FastMCP 3.x n'applique aucun contrôle du header Host par défaut, donc un
+client qui envoie ``Host: <conteneur>:8000`` (nom du conteneur, pas un
+loopback) est accepté sans aucune configuration. (L'ancien SDK ``mcp`` 1.x
+auto-activait une protection anti-DNS-rebinding qui provoquait un
+``421 Invalid Host header`` derrière un réseau de conteneurs ; le port sur
+FastMCP 3.x supprime cette classe de bug à la racine.)
 """
 
 from __future__ import annotations
 
 import os
 
-from starlette.applications import Starlette
+from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.types import ASGIApp
 
@@ -80,10 +83,12 @@ class HeaderCaptureMiddleware:
     """ASGI middleware qui capture les headers HTTP entrants dans le contextvar
     de la requête courante.
 
-    Chacune des branches ASGI (http / websocket / lifecycle) est instrumentée
-    pour appeler ``set_request_headers`` sur la requête, dans le contexte
-    asyncio de celle-ci. Le contextvar est alors visible de toute la chaîne de
-    tool calls servie par cette requête.
+    Le middleware est instancié par FastMCP sous la forme
+    ``Middleware(HeaderCaptureMiddleware)`` (Starlette l'appelle avec l'app
+    interne en argument) ; il instrumente chaque requête HTTP pour appeler
+    ``set_request_headers`` dans le contexte asyncio de la requête. Le
+    contextvar est alors visible de toute la chaîne de tool calls servie par
+    cette requête.
     """
 
     def __init__(self, app):
@@ -99,50 +104,37 @@ class HeaderCaptureMiddleware:
         await self.app(scope, receive, send)
 
 
-def _configure_http(mcp) -> None:
-    """Réglages FastMCP du mode conteneur, avant la création de l'app ASGI.
+def _http_kwargs() -> dict:
+    """Réglages HTTP du mode conteneur, communs à ``build_app()`` et
+    ``main()`` : stateless + middleware de capture des headers.
 
-    ``transport_security = None`` est le cœur du correctif du 421 : FastMCP
-    auto-active la protection anti-DNS-rebinding parce qu'il est construit
-    avec ``host=127.0.0.1`` (défaut), et ``allowed_hosts`` reste figé sur les
-    loopbacks quand on passe à ``0.0.0.0``. Derrière un réseau compose, le
-    client (LibreChat) envoie ``Host: <conteneur>:8000`` → le SDK répond
-    421 « Invalid Host header » avant même l'``initialize``. Service interne
-    (non exposé publiquement), authentifié par relay du jeton utilisateur :
-    contrôle Host/Origin désactivé explicitement (``None`` = la posture par
-    défaut du SDK, protection éteinte).
+    ``host``/``port`` ne figurent pas ici : ils ne s'appliquent qu'au bind
+    réseau, donc seulement dans ``main()`` (``build_app()`` retourne l'ASGI
+    app sans la servir).
     """
-    mcp.settings.host = "0.0.0.0"
-    mcp.settings.port = _port()
-    mcp.settings.stateless_http = True
-    mcp.settings.transport_security = None
+    return {
+        "stateless_http": True,
+        "middleware": [Middleware(HeaderCaptureMiddleware)],
+    }
 
 
 def build_app() -> ASGIApp:
-    """App ASGI du transport HTTP : middleware de capture des headers posé
-    sur l'app streamable-http de FastMCP. Séparé de ``main()`` pour être
+    """App ASGI du transport HTTP : l'app streamable-http de FastMCP avec le
+    middleware de capture des headers greffé. Séparée de ``main()`` pour être
     testable sans lancer uvicorn."""
-    _configure_http(mcp)
-    inner: Starlette = mcp.streamable_http_app()
-    return HeaderCaptureMiddleware(inner)
+    return mcp.http_app(**_http_kwargs())
 
 
 def main() -> None:
-    # On wrap l'app ASGI du transport pour y greffer la capture des headers.
-    # ``streamable_http_app()`` renvoie l'ASGI app interne ; on l'installe
-    # derrière notre middleware, puis on sert avec uvicorn (mêmes paramètres
-    # que ``FastMCP.run(transport="streamable-http")``).
-    import uvicorn
-
-    app = build_app()
-
-    config = uvicorn.Config(
-        app,
-        host=mcp.settings.host,
-        port=mcp.settings.port,
-        log_level=mcp.settings.log_level.lower(),
+    # Le SDK sert lui-même l'app (uvicorn + lifespan + session manager) ; on
+    # passe juste les réglages de bind (host 0.0.0.0 = joignable sur le réseau
+    # compose) et le port, plus les réglages HTTP communs.
+    mcp.run(
+        transport="http",
+        host="0.0.0.0",
+        port=_port(),
+        **_http_kwargs(),
     )
-    uvicorn.Server(config).run()
 
 
 if __name__ == "__main__":

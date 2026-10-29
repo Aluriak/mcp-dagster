@@ -1,6 +1,10 @@
 """Client GraphQL minimal pour l'API Dagster.
 
-L'API Dagster est une API GraphQL unique sur <base_url>/api. On POST des requêtes
+L'API Dagster est une API GraphQL unique, exposée par défaut sur
+`<base_url>/graphql` (layout par défaut d'une instance Dagster, ex. 1.12).
+Le point d'entrée reste paramétrable (config `graphql_url` / env
+`DAGSTER_MCP_GRAPHQL_URL`) pour les installations qui l'exposent ailleurs.
+On POST des requêtes
 documentées avec variables ; les erreurs reviennent dans le champ « errors » de la
 réponse (pas un code HTTP d'erreur).
 """
@@ -106,8 +110,11 @@ class DagsterClient:
         # l'argument (l'argument devient null au lieu d'être omis). On ne
         # transmet donc que les valeurs non-None.
         variables = {k: v for k, v in (variables or {}).items() if v is not None}
+        # Point d'entrée GraphQL : URL effective de la config (graphql_url),
+        # soit l'URL absolue configurée, soit <base_url>/graphql par défaut.
+        # httpx accepte une URL absolue : elle prime sur base_url.
         resp = self._client.post(
-            "/api",
+            self._cfg.graphql_url,
             json={"query": query, "variables": variables},
             headers=self._request_headers(),
         )
@@ -117,7 +124,7 @@ class DagsterClient:
                     {
                         "message": (
                             f"HTTP {resp.status_code} sur l'API Dagster "
-                            f"({self._cfg.base_url}/api) : "
+                            f"({self._cfg.graphql_url}) : "
                             f"{resp.text[:200]}"
                         )
                     }

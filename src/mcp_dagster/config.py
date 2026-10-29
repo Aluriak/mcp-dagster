@@ -5,7 +5,13 @@ Ordre de priorité (le dernier gagne) :
   2. fichier YAML (chemin : env DAGSTER_MCP_CONFIG, sinon ./config.yaml,
      sinon ~/.config/mcp-dagster/config.yaml)
   3. variables d'env ciblées (DAGSTER_MCP_BASE_URL, DAGSTER_MCP_API_TOKEN,
-     DAGSTER_MCP_TIMEOUT, DAGSTER_MCP_READ_ONLY, DAGSTER_MCP_FORWARD_HEADER)
+     DAGSTER_MCP_TIMEOUT, DAGSTER_MCP_READ_ONLY, DAGSTER_MCP_FORWARD_HEADER,
+     DAGSTER_MCP_GRAPHQL_URL)
+
+``graphql_url`` (point d'entrée GraphQL) : URL absolue du point d'entrée
+GraphQL, pour les installations qui ne l'exposent pas sur le chemin par
+défaut ``<base_url>/graphql``. Absent (défaut) : le client POST sur le
+chemin relatif ``/graphql`` résolu contre ``base_url``.
 
 ``forward_header`` (mode HTTP partagé) : quand il est défini, le serveur ne
 doit **pas** utiliser ``api_token`` ; il relaie, tel quel vers Dagster, le
@@ -26,6 +32,14 @@ import yaml
 ENV_PREFIX = "DAGSTER_MCP_"
 
 
+def _is_absolute_url(url: str) -> bool:
+    """Vrai si ``url`` est une URL absolue (scheme + netloc)."""
+    from urllib.parse import urlparse
+
+    p = urlparse(url)
+    return bool(p.scheme in ("http", "https") and p.netloc)
+
+
 def _default_config_paths() -> list[Path]:
     env_path = os.environ.get(ENV_PREFIX + "CONFIG")
     if env_path:
@@ -41,6 +55,7 @@ class Config:
     base_url: str = ""
     api_token: str = ""
     forward_header: str = ""
+    graphql_endpoint: str = ""
     extra_headers: dict[str, str] = field(default_factory=dict)
     timeout: float = 30.0
     read_only: bool = True
@@ -59,6 +74,7 @@ class Config:
             base_url=str(data.get("base_url", "")),
             api_token=str(data.get("api_token", "")),
             forward_header=str(data.get("forward_header", "") or ""),
+            graphql_endpoint=str(data.get("graphql_url", "") or ""),
             extra_headers=dict(data.get("extra_headers") or {}),
             timeout=float(data.get("timeout", 30.0)),
             read_only=bool(data.get("read_only", True)),
@@ -69,6 +85,9 @@ class Config:
         cfg.api_token = os.environ.get(ENV_PREFIX + "API_TOKEN", cfg.api_token)
         cfg.forward_header = (
             os.environ.get(ENV_PREFIX + "FORWARD_HEADER") or cfg.forward_header
+        ).strip()
+        cfg.graphql_endpoint = (
+            os.environ.get(ENV_PREFIX + "GRAPHQL_URL") or cfg.graphql_endpoint
         ).strip()
         if v := os.environ.get(ENV_PREFIX + "TIMEOUT"):
             cfg.timeout = float(v)
@@ -87,6 +106,12 @@ class Config:
                 "base_url manquant : définissez-le dans la config "
                 f"(fichier YAML) ou via {ENV_PREFIX}BASE_URL."
             )
+        if self.graphql_endpoint and not _is_absolute_url(self.graphql_endpoint):
+            raise ValueError(
+                "graphql_url doit être une URL absolue (ex. "
+                "https://dagster.chu-brest.fr/graphql) : "
+                f"reçu {self.graphql_endpoint!r}."
+            )
         if self.api_token and self.forward_header:
             raise ValueError(
                 "api_token et forward_header sont mutuellement exclusifs : "
@@ -97,7 +122,15 @@ class Config:
 
     @property
     def graphql_url(self) -> str:
-        return self.base_url.rstrip("/") + "/api"
+        """URL effective du point d'entrée GraphQL.
+
+        Si ``graphql_endpoint`` est renseigné (config/env ``graphql_url``), il
+        est utilisé tel quel (URL absolue). Sinon, chemin relatif ``/graphql``
+        résolu contre ``base_url`` (layout par défaut d'une instance Dagster).
+        """
+        if self.graphql_endpoint:
+            return self.graphql_endpoint
+        return self.base_url.rstrip("/") + "/graphql"
 
     def outbound_auth_header(self) -> str | None:
         """Valeur du header ``Authorization`` à poser sur l'appel sortant vers

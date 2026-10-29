@@ -30,6 +30,7 @@ Deux façons, la dernière gagnant :
    base_url: "https://dagster.example.org"
    api_token: ""            # Bearer ; ne pas mettre en clair (voir env)
    forward_header: ""       # mode relay du jeton utilisateur (voir plus bas)
+   graphql_url: ""          # URL absolue du point d'entrée GraphQL (défaut : <base_url>/graphql)
    timeout: 30
    read_only: true          # défaut : tout write GraphQL refusé
    extra_headers: {}
@@ -43,11 +44,15 @@ Deux façons, la dernière gagnant :
    | `DAGSTER_MCP_BASE_URL` | `base_url` |
    | `DAGSTER_MCP_API_TOKEN` | `api_token` |
    | `DAGSTER_MCP_FORWARD_HEADER` | `forward_header` |
+   | `DAGSTER_MCP_GRAPHQL_URL` | `graphql_url` (URL absolue du point d'entrée GraphQL) |
    | `DAGSTER_MCP_TIMEOUT` | `timeout` |
    | `DAGSTER_MCP_READ_ONLY` | `read_only` (`0`/`1`, `true`/`false`) |
    | `DAGSTER_MCP_PORT` | port HTTP du serveur conteneur (défaut `8000`) |
 
-L'API est contactée sur `<base_url>/api` (l'UI Dagster est sur `/`).
+L'API est contactée par défaut sur `<base_url>/graphql` (layout standard d'une
+instance Dagster, l'UI est sur `/`). Si votre instance expose le point
+d'entrée ailleurs, définissez `graphql_url` (YAML) ou `DAGSTER_MCP_GRAPHQL_URL`
+(une URL absolue, ex. `https://dagster.example.org/api`).
 
 > **Authentification derrière oauth2-proxy** : si l'instance passe par
 > oauth2-proxy + un IdP (Keycloak, …), il faut un token que le proxy accepte.
@@ -80,7 +85,8 @@ Comportement :
 - Chaque requête MCP entrante doit porter le header configuré (ex.
   `Authorization: Bearer <jeton de l'utilisateur>`).
 - Sa valeur est relayée **telle quelle** comme `Authorization` sur l'appel
-  GraphQL sortant vers `<base_url>/api`.
+  GraphQL sortant (vers le point d'entrée configuré, par défaut
+  `<base_url>/graphql`).
 - Si le header est **absent ou vide** : l'appel échoue explicitement côté MCP
   (message d'erreur clair). **Aucun repli** sur `api_token`.
 - Si `api_token` ET `forward_header` sont définis : **erreur de démarrage**

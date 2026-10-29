@@ -120,7 +120,7 @@ def test_query_returns_data():
     out = c.query("query { repository { name } }")
     assert out == {"repository": {"name": "repo"}}
     req = c._client.requests[0]
-    assert req["url"] == "/api"
+    assert req["url"] == "http://dagster.local/graphql"
     assert req["headers"]["Authorization"] == "Bearer tok"
     assert req["json"] == {"query": "query { repository { name } }", "variables": {}}
 
@@ -278,7 +278,37 @@ def test_config_yaml_and_env(tmp_path, monkeypatch):
     cfg = Config.load()
     assert cfg.read_only is True
     assert cfg.api_token == "env"
+    # Point d'entrée par défaut : base_url + /graphql (layout Dagster).
+    assert cfg.graphql_url == "https://a/graphql"
+
+
+def test_config_graphql_url_override(tmp_path, monkeypatch):
+    """graphql_url (YAML) et DAGSTER_MCP_GRAPHQL_URL (env) surchargent le
+    point d'entrée par défaut ; l'env prime sur le YAML."""
+    y = tmp_path / "cfg.yaml"
+    y.write_text("base_url: https://a\ngraphql_url: https://a/api\n")
+    monkeypatch.setenv("DAGSTER_MCP_CONFIG", str(y))
+    cfg = Config.load()
     assert cfg.graphql_url == "https://a/api"
+
+    monkeypatch.setenv("DAGSTER_MCP_GRAPHQL_URL", "https://b/graphql")
+    assert Config.load().graphql_url == "https://b/graphql"
+
+    # Sans graphql_url : dérivation par défaut inchangée.
+    monkeypatch.delenv("DAGSTER_MCP_GRAPHQL_URL")
+    assert Config.load().graphql_url == "https://a/api"  # yaml encore lu
+
+    monkeypatch.delenv("DAGSTER_MCP_CONFIG")
+    assert Config(base_url="https://a").graphql_url == "https://a/graphql"
+
+
+def test_config_graphql_url_must_be_absolute(tmp_path, monkeypatch):
+    """Un graphql_url relatif est refusé au démarrage (pas ambiguïté base_url)."""
+    y = tmp_path / "cfg.yaml"
+    y.write_text("base_url: https://a\ngraphql_url: /custom\n")
+    monkeypatch.setenv("DAGSTER_MCP_CONFIG", str(y))
+    with pytest.raises(ValueError, match="URL absolue"):
+        Config.load().validate()
 
 
 def test_config_missing_base_url_raises():

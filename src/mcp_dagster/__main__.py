@@ -48,7 +48,7 @@ Header Host / réseau conteneur
 Ce service tourne sur un réseau compose interne et n'est pas exposé
 publiquement ; l'authentification réelle est le relay du jeton utilisateur.
 FastMCP 3.x n'applique aucun contrôle du header Host par défaut, donc un
-client qui envoie ``Host: <conteneur>:8000`` (nom du conteneur, pas un
+client qui envoie ``Host: <conteneur>:8080`` (nom du conteneur, pas un
 loopback) est accepté sans aucune configuration. (L'ancien SDK ``mcp`` 1.x
 auto-activait une protection anti-DNS-rebinding qui provoquait un
 ``421 Invalid Host header`` derrière un réseau de conteneurs ; le port sur

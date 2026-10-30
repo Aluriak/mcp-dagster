@@ -3,7 +3,7 @@
 Historique : sous l'ancien SDK ``mcp`` 1.x, FastMCP auto-activait une
 protection anti-DNS-rebinding (``transport_security``) figée sur les
 loopbacks. Derrière un réseau de conteneurs, LibreChat (client du réseau
-compose) envoie ``Host: mcp-dagster-ro:8000`` (nom du conteneur, pas un
+compose) envoie ``Host: mcp-dagster-ro:8080`` (nom du conteneur, pas un
 loopback) → le SDK répondait **421 Invalid Host header** avant même
 l'``initialize``. Le correctif d'alors désactivait ``transport_security``
 explicitement (commit 5e0d59f) avec un test A/B sur deux instances.
@@ -18,7 +18,7 @@ garantir :
      contextvar (unit, hors réseau) ;
   2. ``build_app()`` retourne l'app ASGI stateless de FastMCP ;
   3. de bout en bout : un client HTTP réel (uvicorn + httpx, header
-     ``Host: mcp-dagster-ro:8000``) passe l'``initialize`` ET le header
+     ``Host: mcp-dagster-ro:8080``) passe l'``initialize`` ET le header
      ``Authorization`` est relayé jusqu'au client Dagster (preuve que le
      contextvar se propage à travers le middleware natif, le lifespan et le
      session manager, jusqu'à l'exécution du tool).
@@ -67,7 +67,7 @@ def _base_headers() -> dict:
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
         # Le header tel quel que reçoit le conteneur sur le réseau compose :
-        "Host": "mcp-dagster-ro:8000",
+        "Host": "mcp-dagster-ro:8080",
     }
 
 
@@ -108,7 +108,7 @@ def test_header_capture_middleware_sets_contextvar():
 
     app = entry.HeaderCaptureMiddleware(FakeInner())
     scope = {"type": "http", "headers": [
-        (b"host", b"mcp-dagster-ro:8000"),
+        (b"host", b"mcp-dagster-ro:8080"),
         (b"authorization", b"Bearer user-jeton"),
         (b"x-foo", b"bar"),
     ]}
@@ -119,7 +119,7 @@ def test_header_capture_middleware_sets_contextvar():
     asyncio.run(drive())
     assert captured.get("authorization") == "Bearer user-jeton"
     assert captured.get("x-foo") == "bar"
-    assert captured.get("host") == "mcp-dagster-ro:8000"
+    assert captured.get("host") == "mcp-dagster-ro:8080"
 
 
 # ── build_app() : app ASGI stateless de FastMCP ─────────────────────────────

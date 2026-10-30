@@ -178,10 +178,10 @@ repository acceptent `location`/`repository` (les valeurs sont visibles via
 **Réseau / header `Host`.** Le port du SDK `mcp` 1.x vers FastMCP 3.x a
 supprimé à la racine l'ancienne protection anti-DNS-rebinding (contrôle du
 header `Host`) qui provoquait des **421 Misdirected Request** derrière un
-réseau de conteneurs (le client envoie `Host: <conteneur>:8000`, pas un
+réseau de conteneurs (le client envoie `Host: <conteneur>:8080`, pas un
 loopback). Le SDK 3.x n'applique aucun contrôle de `Host` par défaut — plus
 aucune configuration nécessaire ; un test de bout en bout le garantit
-(`tests/test_http_host.py`, `Host: mcp-dagster-ro:8000`). L'authentification
+(`tests/test_http_host.py`, `Host: mcp-dagster-ro:8080`). L'authentification
 réelle reste le **relay du jeton utilisateur** (voir ci-dessus).
 
 Le conteneur expose le serveur en **streamable-HTTP stateless** sur le port
@@ -231,6 +231,13 @@ embarquées (outils + exemples) sont validées dans la suite contre le vrai
 schéma Dagster 1.12.1 (fixture `tests/schema_1_12_1.graphql`, généré via
 `create_schema()` de `dagster-graphql`) : tout dérive de schéma échoue les
 tests.
+
+## Convention de versionnage
+
+**La version du MCP = la version de Dagster visée** (ex. tag `v1.12.1` du
+repo ↔ webserver Dagster 1.12.1). Quand le support d'une autre version de
+Dagster sera ajouté (nouvelle fixture de schéma + validation), le tag
+suivant reflète la version visée.
 
 ## Limites connues / suite
 

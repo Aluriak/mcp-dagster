@@ -670,16 +670,25 @@ def test_asset_key_variants():
     assert _asset_key("ch//dataset") == {"path": ["ch", "dataset"]}
 
 
-# ── Validation des requêtes contre le vrai schéma Dagster 1.12.1 ─────────────
+# ── Validation des requêtes contre le vrai schéma Dagster (1.12.1 ET 1.13.x) ─
+#
+# Deux snapshots : le 1.12.1 (historique, convention de versionnement de
+# l'image) et le 1.13.10 (celui qui tourne sur vision, d'après son
+# uv.lock). Le bug rapporté en prod (400 « Unknown argument 'limit' on
+# field Run.assetSelection » + 500 sur le count(*)) ne se manifestait que
+# sur 1.13.x — d'où l'importance de valider les deux.
 
-SCHEMA_PATH = Path(__file__).parent / "schema_1_12_1.graphql"
+SCHEMA_PATHS = {
+    "1_12_1": Path(__file__).parent / "schema_1_12_1.graphql",
+    "1_13_10": Path(__file__).parent / "schema_1_13_10.graphql",
+}
 
 
-@pytest.fixture(scope="module")
-def schema():
+@pytest.fixture(scope="module", params=sorted(SCHEMA_PATHS))
+def schema(request):
     from graphql import build_schema
 
-    return build_schema(SCHEMA_PATH.read_text(encoding="utf-8"))
+    return build_schema(SCHEMA_PATHS[request.param].read_text(encoding="utf-8"))
 
 
 @pytest.mark.parametrize(

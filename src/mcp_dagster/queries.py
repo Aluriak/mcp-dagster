@@ -41,7 +41,10 @@ query {
   }
   runsOrError(filter: {statuses: [FAILURE, CANCELING, CANCELED]}, limit: 10) {
     ... on Runs {
-      count
+      # PAS de « count » : count(*) sur la table runs — sous charge (56k
+      # runs en erreur sur vision) il timeout en Postgres et fait tomber
+      # l'overview entier en 500. Les 10 derniers runs en erreur
+      # suffisent pour la vue d'ensemble.
       results {
         id
         jobName
@@ -305,6 +308,16 @@ query ($key: AssetKeyInput!, $limit: Int) {
 """
 
 RUNS = """
+# Compat Dagster 1.12 → 1.13 :
+#  - PAS de ``count`` ici : c'est un count(*) sur la table runs du metadata
+#    (ex. 56k runs en erreur sur vision) — sous charge il dépasse le
+#    statement_timeout de Postgres et fait tomber l'APPEL ENTIER en 500,
+#    alors que les runs eux-mêmes s'obtiennent sans problème.
+#  - PAS de ``assetSelection(limit: ...)`` : l'argument ``limit`` du champ
+#    ``Run.assetSelection`` n'existe pas sur Dagster 1.13.x → 400
+#    "Unknown argument 'limit' on field 'Run.assetSelection'" (le champ est
+#    sélectionnable sans arg, mais son contenu n'est pas utile dans une
+#    vue liste ; le détail par run passe par RUN_DETAIL).
 query (
   $limit: Int
   $pipelineName: String
@@ -320,7 +333,6 @@ query (
     limit: $limit
   ) {
     ... on Runs {
-      count
       results {
         id
         jobName
@@ -339,7 +351,6 @@ query (
           startTime
           endTime
         }
-        assetSelection(limit: 50) { path }
       }
     }
     ... on InvalidPipelineRunsFilterError {
@@ -593,10 +604,11 @@ EXEMPLES: dict[str, str] = {
     "dernieres_erreurs": """
 # « Quelles sont les dernières erreurs rencontrées par Dagster ? »
 # (variables : $limit, $statuses, $tags — cf. tool dagster_list_runs)
+# Pas de « count » : count(*) sur la table runs → timeout Postgres sous
+# charge (cf. requête RUNS).
 query ($limit: Int, $statuses: [RunStatus!], $tags: [ExecutionTag!]) {
   runsOrError(filter: {statuses: $statuses, tags: $tags}, limit: $limit) {
     ... on Runs {
-      count
       results {
         id jobName status creationTime startTime endTime
         stepStats { stepKey status }
@@ -638,15 +650,18 @@ query ($key: AssetKeyInput!) {
 """,
     "materialisations_en_cours": """
 # « Quelles sont les matérialisations en cours ? Où en est la queue ? »
+# Statuts in-progress compatibles Dagster 1.12/1.13 (SUSPENDED n'existe
+# plus dans l'enum RunStatus de 1.13.x → ne pas l'utiliser). Pas de
+# « count » (count(*) → timeout Postgres sous charge).
 query {
-  runsOrError(filter: {statuses: [STARTING, STARTED, QUEUED, SUSPENDED, CANCELING]}, limit: 50) {
+  runsOrError(filter: {statuses: [STARTING, STARTED, QUEUED, CANCELING]}, limit: 50) {
     ... on Runs {
-      count
       results {
         id jobName status mode creationTime startTime
         rootRunId
         stepStats { stepKey status startTime }
-        assetSelection(limit: 50) { path }
+        # sans argument limit : cet arg n'existe plus sur Dagster 1.13.x
+        assetSelection { path }
       }
     }
     ... on InvalidPipelineRunsFilterError { message }

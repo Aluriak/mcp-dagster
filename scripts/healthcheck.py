@@ -13,7 +13,7 @@ import os
 import urllib.error
 import urllib.request
 
-PORT = int(os.environ.get("DAGSTER_MCP_PORT", "8000"))
+PORT = int(os.environ.get("DAGSTER_MCP_PORT", "8080"))
 URL = f"http://127.0.0.1:{PORT}/mcp"
 
 

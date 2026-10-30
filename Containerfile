@@ -3,7 +3,7 @@
 # Une seule image, deux transports selon l'entrée :
 #   - stdio  : `mcp-dagster` (script) — usage local / orchestrateur MCP en stdio
 #   - HTTP   : `python -m mcp_dagster` — défaut du conteneur (streamable-HTTP,
-#              stateless, port DAGSTER_MCP_PORT, défaut 8000) pour LibreChat
+#              stateless, port DAGSTER_MCP_PORT, défaut 8080) pour LibreChat
 # et les clients MCP HTTP.
 #
 # Lecture seule par défaut (DAGSTER_MCP_READ_ONLY, défaut "true") : les outils
@@ -32,7 +32,7 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     DAGSTER_MCP_READ_ONLY=true
 
-EXPOSE 8000
+EXPOSE 8080
 
 # Santé : l'endpoint streamable-HTTP renvoie 400/405 sur un GET nu — c'est
 # sain tant qu'on a une réponse HTTP (un 404/connexion refusée signifierait

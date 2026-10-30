@@ -20,7 +20,7 @@ Configuration (variables d'env) :
                                Dagster (mode relay du jeton utilisateur)
   DAGSTER_MCP_TIMEOUT       : timeout httpx en secondes (défaut 30)
   DAGSTER_MCP_READ_ONLY     : "true" (défaut) refuse toute écriture GraphQL
-  DAGSTER_MCP_PORT          : port HTTP du serveur (défaut 8000)
+  DAGSTER_MCP_PORT          : port HTTP du serveur (défaut 8080)
 
 Relay du jeton utilisateur
 --------------------------
@@ -66,7 +66,7 @@ from starlette.types import ASGIApp
 from .request_ctx import set_request_headers
 from .server import mcp
 
-_PORT_DEFAULT = 8000
+_PORT_DEFAULT = 8080
 
 
 def _port() -> int:

@@ -57,7 +57,7 @@ Deux façons, la dernière gagnant :
    | `DAGSTER_MCP_GRAPHQL_URL` | `graphql_url` (URL absolue du point d'entrée GraphQL) |
    | `DAGSTER_MCP_TIMEOUT` | `timeout` |
    | `DAGSTER_MCP_READ_ONLY` | `read_only` (`0`/`1`, `true`/`false`) |
-   | `DAGSTER_MCP_PORT` | port HTTP du serveur conteneur (défaut `8000`) |
+   | `DAGSTER_MCP_PORT` | port HTTP du serveur conteneur (défaut `8080`) |
 
 L'API est contactée par défaut sur `<base_url>/graphql` (layout standard d'une
 instance Dagster, l'UI est sur `/`). Si votre instance expose le point
@@ -111,7 +111,7 @@ produit) :
 # Config du client MCP HTTP qui consomme le serveur en mode partagé
 mcpServers:
   dagster:
-    url: "http://localhost:8000/mcp"
+    url: "http://localhost:8080/mcp"
     headers:
       # Le client (ou le reverse proxy en amont) doit poser le jeton
       # de l'utilisateur courant dans le header nommé par forward_header.
@@ -185,7 +185,7 @@ aucune configuration nécessaire ; un test de bout en bout le garantit
 réelle reste le **relay du jeton utilisateur** (voir ci-dessus).
 
 Le conteneur expose le serveur en **streamable-HTTP stateless** sur le port
-`DAGSTER_MCP_PORT` (défaut `8000`) :
+`DAGSTER_MCP_PORT` (défaut `8080`) :
 
 ```bash
 python -m mcp_dagster
@@ -195,12 +195,12 @@ Construire et lancer :
 
 ```bash
 podman build -t mcp-dagster:local -f Containerfile .
-podman run --rm -p 8000:8000 \
+podman run --rm -p 8080:8080 \
   -e DAGSTER_MCP_BASE_URL=https://dagster.example.org \
   -e DAGSTER_MCP_API_TOKEN=*** \
   -e DAGSTER_MCP_READ_ONLY=true \
   mcp-dagster:local
-# endpoint MCP : http://localhost:8000/mcp
+# endpoint MCP : http://localhost:8080/mcp
 ```
 
 Extrait de compose pour LibreChat (serveur MCP HTTP) :
